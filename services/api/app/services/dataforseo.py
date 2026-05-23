@@ -59,6 +59,100 @@ async def fetch_serp(
     }
 
 
+async def fetch_domain_keywords(
+    domain: str,
+    language_code: str = "en",
+    location_code: int = 2840,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """
+    Return keywords a domain currently ranks for (top 100 results).
+    Uses DataForSEO Domain Rank Overview → Organic Keywords endpoint.
+    """
+    # Strip protocol/path — DataForSEO wants bare domain
+    from urllib.parse import urlparse
+    parsed = urlparse(domain if "://" in domain else f"https://{domain}")
+    bare = parsed.netloc or parsed.path
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.post(
+            f"{BASE_URL}/dataforseo_labs/google/ranked_keywords/live",
+            headers={**_auth(), "Content-Type": "application/json"},
+            json=[{
+                "target": bare,
+                "language_code": language_code,
+                "location_code": location_code,
+                "limit": limit,
+                "order_by": ["keyword_data.keyword_info.search_volume,desc"],
+                "filters": [
+                    ["ranked_serp_element.serp_item.type", "=", "organic"],
+                    ["ranked_serp_element.serp_item.rank_group", "<=", 20],
+                ],
+            }],
+        )
+        r.raise_for_status()
+        data = r.json()
+
+    task = (data.get("tasks") or [{}])[0]
+    items = (task.get("result") or [{}])[0].get("items") or []
+
+    return [
+        {
+            "keyword": item.get("keyword_data", {}).get("keyword"),
+            "search_volume": item.get("keyword_data", {}).get("keyword_info", {}).get("search_volume"),
+            "cpc": item.get("keyword_data", {}).get("keyword_info", {}).get("cpc"),
+            "keyword_difficulty": item.get("keyword_data", {}).get("keyword_properties", {}).get("keyword_difficulty"),
+            "position": item.get("ranked_serp_element", {}).get("serp_item", {}).get("rank_group"),
+        }
+        for item in items
+        if item.get("keyword_data", {}).get("keyword")
+    ]
+
+
+async def fetch_domain_competitors(
+    domain: str,
+    language_code: str = "en",
+    location_code: int = 2840,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """
+    Return organic competitor domains ordered by intersection count.
+    Uses DataForSEO Labs Competitors Domain endpoint.
+    """
+    from urllib.parse import urlparse
+    parsed = urlparse(domain if "://" in domain else f"https://{domain}")
+    bare = parsed.netloc or parsed.path
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.post(
+            f"{BASE_URL}/dataforseo_labs/google/competitors_domain/live",
+            headers={**_auth(), "Content-Type": "application/json"},
+            json=[{
+                "target": bare,
+                "language_code": language_code,
+                "location_code": location_code,
+                "limit": limit,
+                "exclude_top_domains": True,
+            }],
+        )
+        r.raise_for_status()
+        data = r.json()
+
+    task = (data.get("tasks") or [{}])[0]
+    items = (task.get("result") or [{}])[0].get("items") or []
+
+    return [
+        {
+            "domain": item.get("domain"),
+            "avg_position": item.get("avg_position"),
+            "intersections": item.get("intersections"),
+            "competitor_metrics": item.get("metrics", {}).get("organic", {}),
+        }
+        for item in items
+        if item.get("domain")
+    ]
+
+
 async def fetch_backlink_opportunities(
     target_domain: str,
     limit: int = 20,

@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
-from app.routers import health, projects, agents, keywords, content, integrations, billing, analytics, outreach, campaigns
+from app.routers import health, projects, agents, keywords, content, integrations, billing, analytics, outreach, campaigns, audit
 
 
 @asynccontextmanager
@@ -27,6 +27,7 @@ app.include_router(agents.router, prefix="/api", tags=["agents"])
 app.include_router(content.router, prefix="/api/content", tags=["content"])
 app.include_router(integrations.router, prefix="/api/integrations", tags=["integrations"])
 app.include_router(billing.router, prefix="/api/billing", tags=["billing"])
+app.include_router(audit.router, prefix="/api/audit", tags=["audit"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
 app.include_router(outreach.router, prefix="/api/outreach", tags=["outreach"])
 app.include_router(campaigns.router, prefix="/api/campaigns", tags=["campaigns"])
