@@ -1,0 +1,45 @@
+# deps
+node_modules/
+.pnp
+.pnp.js
+
+# Next.js
+.next/
+out/
+build/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.uv/
+dist/
+*.egg
+
+# env
+.env
+.env.local
+.env.*.local
+
+# turbo
+.turbo/
+
+# Alembic cache
+services/api/alembic/__pycache__/
+services/api/alembic/versions/__pycache__/
+
+# uv lock artifacts
+.uv/
+
+# Claude Code local settings
+.claude/
+
+# misc
+.DS_Store
+*.log
+*.tsbuildinfo
+coverage/
+.coverage
+.pytest_cache/
+*.sqlite3
