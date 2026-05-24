@@ -11,6 +11,7 @@ celery_app = Celery(
         "app.tasks.publish_tasks",
         "app.tasks.analytics_tasks",
         "app.tasks.campaign_tasks",
+        "app.tasks.citation_tasks",
     ],
 )
 

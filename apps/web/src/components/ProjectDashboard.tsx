@@ -20,6 +20,7 @@ import {
   ArrowRight,
   Copy,
   Check,
+  Zap,
 } from "lucide-react";
 import type { Project, ProgressStep } from "@findme/types";
 
@@ -46,6 +47,27 @@ interface ArticleRef {
   wordCount: number;
   aeoScore?: number;
 }
+
+interface CitationResult {
+  id: string;
+  query: string;
+  model: string;
+  mentioned: boolean;
+  position: number | null;
+  sentiment: string;
+  excerpt: string | null;
+  checkedAt: string;
+}
+
+interface ModelSummary {
+  queries_run: number;
+  mentioned_count: number;
+  mention_rate: number; // 0-100
+  avg_position: number | null;
+}
+
+// summary is flat: { [model_name]: ModelSummary }
+type CitationSummary = Record<string, ModelSummary>;
 
 function AeoScoreBadge({ score }: { score: number }) {
   const color =
@@ -134,9 +156,11 @@ function StatPill({ label, value }: { label: string; value: unknown }) {
 export function ProjectDashboard({ projectId, project, initialJobs }: Props) {
   const firstSeoJob = initialJobs.find((j) => j.type === "seo_analysis") ?? null;
   const firstContentJob = initialJobs.find((j) => j.type === "content_gen") ?? null;
+  const firstCitationJob = initialJobs.find((j) => j.type === "citation_check") ?? null;
 
   const [seoJob, setSeoJob] = useState<JobSummary | null>(firstSeoJob);
   const [contentJob, setContentJob] = useState<JobSummary | null>(firstContentJob);
+  const [citationJob, setCitationJob] = useState<JobSummary | null>(firstCitationJob);
 
   const isActive = (j: JobSummary | null) =>
     j?.status === "running" || j?.status === "queued";
@@ -147,6 +171,9 @@ export function ProjectDashboard({ projectId, project, initialJobs }: Props) {
   const [activeContentJobId, setActiveContentJobId] = useState<string | null>(
     isActive(firstContentJob) ? firstContentJob!.id : null
   );
+  const [activeCitationJobId, setActiveCitationJobId] = useState<string | null>(
+    isActive(firstCitationJob) ? firstCitationJob!.id : null
+  );
 
   const [topics, setTopics] = useState<Topic[]>(
     (firstSeoJob?.outputData?.suggested_topics as Topic[] | undefined) ?? []
@@ -154,14 +181,18 @@ export function ProjectDashboard({ projectId, project, initialJobs }: Props) {
 
   const [seoError, setSeoError] = useState<string | null>(null);
   const [contentError, setContentError] = useState<string | null>(null);
+  const [citationError, setCitationError] = useState<string | null>(null);
+  const [citationResults, setCitationResults] = useState<CitationResult[]>([]);
   const [llmsTxt, setLlmsTxt] = useState<string | null>(null);
   const [llmsTxtOpen, setLlmsTxtOpen] = useState(false);
 
   const { steps: seoSteps, done: seoDone } = useJobProgress(activeSeoJobId);
   const { steps: contentSteps, done: contentDone } = useJobProgress(activeContentJobId);
+  const { steps: citationSteps, done: citationDone } = useJobProgress(activeCitationJobId);
 
   const fetchedSeoRef = useRef<string | null>(null);
   const fetchedContentRef = useRef<string | null>(null);
+  const fetchedCitationRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!seoDone || !activeSeoJobId) return;
@@ -187,8 +218,25 @@ export function ProjectDashboard({ projectId, project, initialJobs }: Props) {
     });
   }, [contentDone, activeContentJobId]);
 
+  useEffect(() => {
+    if (!citationDone || !activeCitationJobId) return;
+    if (fetchedCitationRef.current === activeCitationJobId) return;
+    fetchedCitationRef.current = activeCitationJobId;
+    const id = activeCitationJobId;
+    setActiveCitationJobId(null);
+    apiClient.get<JobSummary>(`/api/jobs/${id}`).then((job) => {
+      setCitationJob(job);
+      return apiClient.get<CitationResult[]>(
+        `/api/projects/${projectId}/citation-results?job_id=${id}`
+      );
+    }).then((results) => {
+      setCitationResults(results);
+    }).catch(() => {});
+  }, [citationDone, activeCitationJobId, projectId]);
+
   const seoRunning = activeSeoJobId !== null;
   const contentRunning = activeContentJobId !== null;
+  const citationRunning = activeCitationJobId !== null;
 
   const handleRunSeo = async () => {
     setSeoError(null);
@@ -245,6 +293,32 @@ export function ProjectDashboard({ projectId, project, initialJobs }: Props) {
   };
   const removeTopic = (i: number) => setTopics((prev) => prev.filter((_, idx) => idx !== i));
   const addTopic = () => setTopics((prev) => [...prev, { title: "", keyword: "" }]);
+
+  const handleRunCitation = async () => {
+    setCitationError(null);
+    try {
+      const { jobId } = await apiClient.post<{ jobId: string }>(
+        `/api/projects/${projectId}/run-citation-check`,
+        {}
+      );
+      setCitationJob({
+        id: jobId,
+        type: "citation_check",
+        status: "queued",
+        progress: 0,
+        progressSteps: [],
+        outputData: null,
+        errorMessage: null,
+        startedAt: null,
+        completedAt: null,
+      });
+      setCitationResults([]);
+      setActiveCitationJobId(jobId);
+      fetchedCitationRef.current = null;
+    } catch (e) {
+      setCitationError(e instanceof Error ? e.message : "Failed to start citation check");
+    }
+  };
 
   const fetchLlmsTxt = async () => {
     if (llmsTxt) { setLlmsTxtOpen(true); return; }
@@ -541,7 +615,211 @@ export function ProjectDashboard({ projectId, project, initialJobs }: Props) {
             )}
           </div>
         )}
+
+        {/* ── AI Citation Check ────────────────────────── */}
+        <CitationCard
+          citationJob={citationJob}
+          citationRunning={citationRunning}
+          citationSteps={citationSteps}
+          citationResults={citationResults}
+          citationError={citationError}
+          onRun={handleRunCitation}
+        />
       </div>
+    </div>
+  );
+}
+
+interface CitationCardProps {
+  citationJob: JobSummary | null;
+  citationRunning: boolean;
+  citationSteps: import("@findme/types").ProgressStep[];
+  citationResults: CitationResult[];
+  citationError: string | null;
+  onRun: () => void;
+}
+
+const MODEL_LABELS: Record<string, string> = {
+  claude: "Claude",
+  "gpt-4o-mini": "GPT-4o",
+  perplexity: "Perplexity",
+};
+
+function MentionRateBadge({ rate, model }: { rate: number; model: string }) {
+  const color =
+    rate >= 50 ? "text-chart-2" :
+    rate >= 20 ? "text-chart-5" :
+    "text-destructive";
+  return (
+    <div className="flex flex-col items-center gap-0.5">
+      <span className={`text-base font-bold font-mono ${color}`}>{rate}%</span>
+      <span className="text-[10px] text-muted-foreground">{MODEL_LABELS[model] ?? model}</span>
+    </div>
+  );
+}
+
+function CitationCard({
+  citationJob,
+  citationRunning,
+  citationSteps,
+  citationResults,
+  citationError,
+  onRun,
+}: CitationCardProps) {
+  const summary = citationJob?.outputData?.summary as CitationSummary | undefined;
+  const modelsChecked = (citationJob?.outputData?.models_checked as string[] | undefined) ?? [];
+
+  const queriesByModel: Record<string, CitationResult[]> = {};
+  for (const r of citationResults) {
+    if (!queriesByModel[r.model]) queriesByModel[r.model] = [];
+    queriesByModel[r.model].push(r);
+  }
+
+  return (
+    <div className="bg-card border border-border rounded-xl p-5">
+      <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center gap-2">
+          <Zap size={14} className="text-muted-foreground" />
+          <h2 className="text-sm font-semibold text-foreground">AI Citation Check</h2>
+        </div>
+        <div className="flex items-center gap-2.5">
+          {citationJob && !citationRunning && (
+            <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${
+              citationJob.status === "completed" ? "bg-chart-2/15 text-chart-2" :
+              citationJob.status === "failed" ? "bg-destructive/10 text-destructive" :
+              "bg-muted text-muted-foreground"
+            }`}>
+              {citationJob.status}
+            </span>
+          )}
+          <button
+            onClick={onRun}
+            disabled={citationRunning}
+            className="inline-flex items-center gap-1.5 h-7 px-3 rounded-md text-[12px] font-medium bg-primary/10 text-primary hover:bg-primary/15 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+          >
+            {citationRunning ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : citationJob ? (
+              <RefreshCw size={12} />
+            ) : (
+              <Play size={12} />
+            )}
+            {citationRunning ? "Checking…" : citationJob ? "Re-check" : "Run Check"}
+          </button>
+        </div>
+      </div>
+
+      <p className="text-[11px] text-muted-foreground mb-4">
+        Ask Claude, GPT-4o, and Perplexity your category queries — see if they mention your brand.
+      </p>
+
+      {/* Live progress */}
+      {citationRunning && citationSteps.length > 0 && (
+        <div className="divide-y divide-border mb-4 border border-border rounded-lg px-3">
+          {citationSteps.map((step) => (
+            <StepRow key={step.name} step={step} />
+          ))}
+        </div>
+      )}
+      {citationRunning && citationSteps.length === 0 && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground py-2 mb-3">
+          <Loader2 size={12} className="animate-spin" />
+          Queued…
+        </div>
+      )}
+
+      {/* Error */}
+      {(citationError ?? (citationJob?.status === "failed" ? citationJob.errorMessage : null)) && (
+        <p className="text-xs text-destructive bg-destructive/5 rounded-md px-3 py-2 mb-3">
+          {citationError ?? citationJob?.errorMessage}
+        </p>
+      )}
+
+      {/* Results */}
+      {citationJob?.status === "completed" && summary && (
+        <div className="space-y-5">
+          {/* Per-model mention rates */}
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+              Mention Rates
+            </p>
+            <div className="flex gap-6">
+              {modelsChecked.map((model) => {
+                const m = summary[model];
+                return m ? (
+                  <MentionRateBadge key={model} model={model} rate={m.mention_rate} />
+                ) : null;
+              })}
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-3">
+              {(citationJob.outputData?.queries_run as number | undefined) ?? 0} queries across {modelsChecked.length} models
+            </p>
+          </div>
+
+          {/* Query results grouped by model */}
+          {citationResults.length > 0 && (
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                Query Details
+              </p>
+              <div className="space-y-3">
+                {modelsChecked.map((model) => {
+                  const rows = queriesByModel[model] ?? [];
+                  if (rows.length === 0) return null;
+                  return (
+                    <div key={model} className="border border-border rounded-lg overflow-hidden">
+                      <div className="px-3 py-2 bg-muted/30 border-b border-border">
+                        <span className="text-[11px] font-semibold text-foreground">
+                          {MODEL_LABELS[model] ?? model}
+                        </span>
+                      </div>
+                      <div className="divide-y divide-border">
+                        {rows.map((r) => (
+                          <div key={r.id} className="px-3 py-2.5 flex items-start gap-3">
+                            <div className="mt-0.5 shrink-0">
+                              {r.mentioned ? (
+                                <CheckCircle2 size={13} className="text-chart-2" />
+                              ) : (
+                                <Circle size={13} className="text-muted-foreground/30" />
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-[12px] text-foreground leading-snug">{r.query}</p>
+                              {r.excerpt && (
+                                <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">
+                                  "{r.excerpt}"
+                                </p>
+                              )}
+                            </div>
+                            {r.mentioned && r.sentiment !== "none" && (
+                              <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                                r.sentiment === "positive" ? "bg-chart-2/15 text-chart-2" :
+                                r.sentiment === "negative" ? "bg-destructive/10 text-destructive" :
+                                "bg-muted text-muted-foreground"
+                              }`}>
+                                {r.sentiment}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Empty state */}
+      {!citationJob && !citationRunning && (
+        <div className="py-4 text-center border border-dashed border-border rounded-lg">
+          <p className="text-xs text-muted-foreground">
+            Check how often Claude, GPT-4o, and Perplexity mention your brand in category queries.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

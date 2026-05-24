@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     supabase_service_role_key: str = ""
 
     anthropic_api_key: str = ""
+    openai_api_key: str = ""
+    perplexity_api_key: str = ""
 
     dataforseo_login: str = ""
     dataforseo_password: str = ""
