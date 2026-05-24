@@ -102,6 +102,10 @@ class SEOIntelligenceAgent(BaseAgent):
             brief = f"[SEO brief generation failed: {e}]"
             cost = 0.0
 
+        # Parse suggested article topics from the brief
+        from app.agents.content_generation import _parse_topics_from_brief
+        suggested_topics = _parse_topics_from_brief(brief)
+
         self.emit(
             "seo_analysis",
             "completed",
@@ -110,8 +114,18 @@ class SEOIntelligenceAgent(BaseAgent):
 
         return {
             "seo_brief": brief,
+            "suggested_topics": suggested_topics,
             "keywords_analyzed": len(keywords_with_serp),
             "competitors_found": len(competitor_counts),
+            "keywords_summary": [
+                {
+                    "keyword": kw["keyword"],
+                    "search_volume": kw.get("search_volume"),
+                    "keyword_difficulty": kw.get("keyword_difficulty"),
+                }
+                for kw in keywords_with_serp
+            ],
+            "top_competitors": sorted(competitor_counts.items(), key=lambda x: x[1], reverse=True)[:5],
             "cost": cost,
         }
 

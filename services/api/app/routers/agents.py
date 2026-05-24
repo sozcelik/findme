@@ -20,6 +20,61 @@ class RunPipelineRequest(BaseModel):
     contentTypes: list[str] | None = None
 
 
+class RunContentGenerationRequest(BaseModel):
+    topics: list[dict]
+
+
+@router.post("/projects/{project_id}/run-seo-analysis")
+async def run_seo_analysis_endpoint(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    from app.tasks.agent_tasks import run_seo_analysis
+
+    job = AgentJob(
+        id=str(uuid.uuid4()),
+        org_id=ORG_ID,
+        project_id=project_id,
+        type="seo_analysis",
+        status="queued",
+        input_data={},
+        progress=0,
+        progress_steps=[],
+    )
+    db.add(job)
+    await db.commit()
+
+    run_seo_analysis.delay(job.id, project_id, ORG_ID)
+
+    return {"jobId": job.id}
+
+
+@router.post("/projects/{project_id}/run-content-generation")
+async def run_content_generation_endpoint(
+    project_id: str,
+    body: RunContentGenerationRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    from app.tasks.agent_tasks import run_content_generation
+
+    job = AgentJob(
+        id=str(uuid.uuid4()),
+        org_id=ORG_ID,
+        project_id=project_id,
+        type="content_gen",
+        status="queued",
+        input_data={"topics": body.topics},
+        progress=0,
+        progress_steps=[],
+    )
+    db.add(job)
+    await db.commit()
+
+    run_content_generation.delay(job.id, project_id, ORG_ID, body.topics)
+
+    return {"jobId": job.id}
+
+
 @router.post("/projects/{project_id}/run-pipeline")
 async def run_pipeline(
     project_id: str,

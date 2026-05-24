@@ -165,6 +165,158 @@ def run_full_pipeline(self, job_id: str, project_id: str, org_id: str):
 
 
 @celery_app.task(
+    name="app.tasks.agent_tasks.run_seo_analysis",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=30,
+)
+def run_seo_analysis(self, job_id: str, project_id: str, org_id: str):
+    import redis as sync_redis
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from app.config import settings
+    from app.db.models.agent_job import AgentJob
+    from app.db.models.project import Project
+    from app.agents.seo_intelligence import SEOIntelligenceAgent
+
+    sync_url = settings.database_url.replace("+asyncpg", "+psycopg2")
+    engine = create_engine(sync_url, pool_pre_ping=True)
+    r = sync_redis.from_url(settings.redis_url)
+
+    try:
+        with Session(engine) as db:
+            job = db.get(AgentJob, job_id)
+            if not job:
+                return
+            job.status = "running"
+            job.started_at = datetime.now(timezone.utc)
+            db.commit()
+
+            project = db.get(Project, project_id)
+            if not project:
+                job.status = "failed"
+                job.error_message = "Project not found"
+                db.commit()
+                return
+
+            agent = SEOIntelligenceAgent(job_id=job_id, redis_client=r)
+            output = agent.run(project_id=project_id, org_id=org_id, db=db, project=project)
+
+            job.status = "completed"
+            job.progress = 100
+            job.completed_at = datetime.now(timezone.utc)
+            job.credits_used = float(output.get("cost", 0))
+            job.output_data = {
+                "seo_brief_full": output.get("seo_brief", ""),
+                "suggested_topics": output.get("suggested_topics", []),
+                "keywords_analyzed": output.get("keywords_analyzed", 0),
+                "competitors_found": output.get("competitors_found", 0),
+                "keywords_summary": output.get("keywords_summary", []),
+                "top_competitors": output.get("top_competitors", []),
+            }
+            db.commit()
+
+    except Exception as exc:
+        with Session(engine) as db:
+            job = db.get(AgentJob, job_id)
+            if job:
+                job.status = "failed"
+                job.error_message = str(exc)[:1000]
+                job.completed_at = datetime.now(timezone.utc)
+                db.commit()
+        raise self.retry(exc=exc, countdown=30)
+    finally:
+        r.close()
+        engine.dispose()
+
+
+@celery_app.task(
+    name="app.tasks.agent_tasks.run_content_generation",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=30,
+)
+def run_content_generation(self, job_id: str, project_id: str, org_id: str, topics: list):
+    import redis as sync_redis
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import Session
+    from app.config import settings
+    from app.db.models.agent_job import AgentJob
+    from app.db.models.project import Project
+    from app.agents.content_generation import ContentGenerationAgent
+
+    sync_url = settings.database_url.replace("+asyncpg", "+psycopg2")
+    engine = create_engine(sync_url, pool_pre_ping=True)
+    r = sync_redis.from_url(settings.redis_url)
+
+    try:
+        with Session(engine) as db:
+            job = db.get(AgentJob, job_id)
+            if not job:
+                return
+            job.status = "running"
+            job.started_at = datetime.now(timezone.utc)
+            db.commit()
+
+            project = db.get(Project, project_id)
+            if not project:
+                job.status = "failed"
+                job.error_message = "Project not found"
+                db.commit()
+                return
+
+            # Fetch seo_brief from the latest completed seo_analysis job
+            latest_seo = db.execute(
+                select(AgentJob)
+                .where(
+                    AgentJob.project_id == project_id,
+                    AgentJob.org_id == org_id,
+                    AgentJob.type == "seo_analysis",
+                    AgentJob.status == "completed",
+                )
+                .order_by(AgentJob.completed_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+
+            seo_brief = ""
+            if latest_seo and latest_seo.output_data:
+                seo_brief = latest_seo.output_data.get("seo_brief_full", "")
+
+            agent = ContentGenerationAgent(job_id=job_id, redis_client=r)
+            output = agent.run(
+                project_id=project_id,
+                org_id=org_id,
+                db=db,
+                project=project,
+                seo_brief=seo_brief,
+                topics=topics or [],
+            )
+
+            job.status = "completed"
+            job.progress = 100
+            job.completed_at = datetime.now(timezone.utc)
+            job.credits_used = float(output.get("cost", 0))
+            job.output_data = {
+                "articles_generated": output.get("articles_generated", 0),
+                "articles": output.get("articles", []),
+            }
+            db.commit()
+
+    except Exception as exc:
+        with Session(engine) as db:
+            job = db.get(AgentJob, job_id)
+            if job:
+                job.status = "failed"
+                job.error_message = str(exc)[:1000]
+                job.completed_at = datetime.now(timezone.utc)
+                db.commit()
+        raise self.retry(exc=exc, countdown=30)
+    finally:
+        r.close()
+        engine.dispose()
+
+
+@celery_app.task(
     name="app.tasks.agent_tasks.run_outreach_pipeline",
     bind=True,
     max_retries=2,

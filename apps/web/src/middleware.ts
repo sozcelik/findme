@@ -2,6 +2,11 @@ import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 export async function middleware(request: NextRequest) {
+  // Skip auth in development so the UI can be tested without Supabase credentials
+  if (process.env.NEXT_PUBLIC_SKIP_AUTH === "true") {
+    return NextResponse.next({ request });
+  }
+
   let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(
