@@ -1,5 +1,6 @@
 import uuid
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -53,6 +54,34 @@ async def get_project(project_id: str, db: AsyncSession = Depends(get_db)):
     if not project or project.org_id != ORG_ID:
         raise HTTPException(status_code=404, detail="Project not found")
     return _serialize(project)
+
+
+@router.get("/{project_id}/llms.txt", response_class=PlainTextResponse)
+async def get_llms_txt(project_id: str, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy.orm import Session
+    from app.services.llms_txt import generate_llms_txt
+    project = await db.get(Project, project_id)
+    if not project or project.org_id != ORG_ID:
+        raise HTTPException(status_code=404, detail="Project not found")
+    # llms_txt generator uses sync session — run inline with sync wrapper
+    from sqlalchemy import create_engine
+    from app.config import settings
+    sync_url = settings.database_url.replace("+asyncpg", "+psycopg2")
+    engine = create_engine(sync_url, pool_pre_ping=True)
+    with Session(engine) as sync_db:
+        sync_project = sync_db.get(Project, project_id)
+        content = generate_llms_txt(sync_project, sync_db)
+    engine.dispose()
+    return content
+
+
+@router.get("/{project_id}/robots-snippet", response_class=PlainTextResponse)
+async def get_robots_snippet(project_id: str, db: AsyncSession = Depends(get_db)):
+    from app.services.llms_txt import generate_robots_txt_snippet
+    project = await db.get(Project, project_id)
+    if not project or project.org_id != ORG_ID:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return generate_robots_txt_snippet()
 
 
 @router.get("/{project_id}/jobs")

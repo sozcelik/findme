@@ -137,6 +137,9 @@ async def list_social_posts(content_id: str, db: AsyncSession = Depends(get_db))
 
 
 def _serialize(c: ContentItem, body: bool) -> dict:
+    from app.services.aeo_scorer import score_content, score_to_dict
+    from app.services.schema_markup import generate_all_schemas
+
     data: dict = {
         "id": c.id,
         "projectId": c.project_id,
@@ -148,6 +151,7 @@ def _serialize(c: ContentItem, body: bool) -> dict:
         "focusKeyword": c.focus_keyword,
         "wordCount": c.word_count,
         "seoScore": c.seo_score,
+        "aeoScore": int(c.ai_visibility_score) if c.ai_visibility_score is not None else None,
         "aiVisibilityScore": c.ai_visibility_score,
         "status": c.status,
         "aiModelUsed": c.ai_model_used,
@@ -155,6 +159,16 @@ def _serialize(c: ContentItem, body: bool) -> dict:
         "publishedAt": c.published_at.isoformat() if c.published_at else None,
         "createdAt": c.created_at.isoformat(),
     }
-    if body:
+    if body and c.body_markdown:
         data["bodyMarkdown"] = c.body_markdown
+        aeo_data = score_to_dict(score_content(c.body_markdown))
+        data["aeoScore"] = aeo_data["aeo_score"]
+        data["aeoBreakdown"] = aeo_data["breakdown"]
+        data["aeoSuggestions"] = aeo_data["suggestions"]
+        data["schemas"] = generate_all_schemas(
+            title=c.title or "",
+            markdown=c.body_markdown,
+            url=f"/{c.slug or c.id}",
+            publisher_name="",
+        )
     return data

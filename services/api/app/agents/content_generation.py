@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 from app.agents.base import BaseAgent
 from app.db.models.content_item import ContentItem
 from app.db.models.social_post import SocialPost
+from app.services.aeo_scorer import score_content, score_to_dict
+from app.services.schema_markup import generate_all_schemas
 
 
 class ContentGenerationAgent(BaseAgent):
@@ -46,6 +48,19 @@ class ContentGenerationAgent(BaseAgent):
                 title = _extract_h1(markdown) or topic["title"]
                 word_count = len(markdown.split())
 
+                # AEO scoring
+                aeo = score_content(markdown)
+                aeo_data = score_to_dict(aeo)
+
+                # Schema.org markup
+                article_url = f"{project.website_url.rstrip('/')}/{_slugify(title)}"
+                schemas = generate_all_schemas(
+                    title=title,
+                    markdown=markdown,
+                    url=article_url,
+                    publisher_name=project.name,
+                )
+
                 item = ContentItem(
                     id=str(uuid.uuid4()),
                     project_id=project_id,
@@ -59,6 +74,7 @@ class ContentGenerationAgent(BaseAgent):
                     status="draft",
                     ai_model_used="claude-sonnet-4-6",
                     generation_cost=cost,
+                    ai_visibility_score=float(aeo.total_score),
                 )
                 db.add(item)
 
@@ -87,7 +103,15 @@ class ContentGenerationAgent(BaseAgent):
                 except Exception:
                     pass  # social post generation failure is non-fatal
 
-                articles.append({"id": item.id, "title": title, "wordCount": word_count})
+                articles.append({
+                    "id": item.id,
+                    "title": title,
+                    "wordCount": word_count,
+                    "aeoScore": aeo.total_score,
+                    "aeoBreakdown": aeo_data["breakdown"],
+                    "aeoSuggestions": aeo_data["suggestions"],
+                    "schemas": schemas,
+                })
 
             except Exception as e:
                 self.emit("content_generation", "running", f"Article {i+1} failed: {e}")
@@ -109,20 +133,38 @@ def _parse_topics_from_brief(brief: str) -> list[dict]:
 
     for line in brief.splitlines():
         lower = line.lower().strip()
-        if "recommended article" in lower or ("article" in lower and "title" in lower):
+
+        if "recommended article" in lower or "content calendar" in lower or "article titles" in lower:
             in_section = True
             continue
-        if in_section and lower.startswith(("##", "**")):
-            if "quick win" in lower or "intent" in lower or "cluster" in lower or "gap" in lower:
-                break
 
-        if in_section and line.strip():
+        if in_section and lower.startswith(("##", "---")):
+            break
+
+        if not in_section or not line.strip():
+            continue
+
+        # Markdown table row: | 1 | "Title here" | keyword | ...
+        if line.strip().startswith("|"):
+            # Skip header/separator rows
+            if re.match(r"^\s*\|[\s\-:]+\|", line) or "title" in lower[:30]:
+                continue
+            cells = [c.strip().strip('"') for c in line.split("|") if c.strip()]
+            if len(cells) >= 2:
+                # First non-numeric cell is the title, second is the keyword
+                title = next((c for c in cells if len(c) > 10 and not c.isdigit()), "")
+                keyword = cells[2].strip('"') if len(cells) > 2 else title.lower()
+                title = re.sub(r"\*+", "", title).strip()
+                if title and len(title) > 10:
+                    topics.append({"title": title, "keyword": keyword.lower()})
+        else:
+            # Plain list item
             raw = re.sub(r"^[\d\.\-\*\s#]+", "", line).strip()
             raw = re.sub(r"\*+", "", raw).strip()
             if len(raw) > 15:
                 topics.append({"title": raw, "keyword": raw.lower()})
 
-    return topics[:3]
+    return topics[:5]
 
 
 def _extract_h1(markdown: str) -> str | None:

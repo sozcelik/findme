@@ -18,6 +18,8 @@ import {
   Tag,
   BarChart2,
   ArrowRight,
+  Copy,
+  Check,
 } from "lucide-react";
 import type { Project, ProgressStep } from "@findme/types";
 
@@ -42,6 +44,37 @@ interface ArticleRef {
   id: string;
   title: string;
   wordCount: number;
+  aeoScore?: number;
+}
+
+function AeoScoreBadge({ score }: { score: number }) {
+  const color =
+    score >= 70 ? "bg-chart-2/15 text-chart-2" :
+    score >= 45 ? "bg-chart-5/15 text-chart-5" :
+    "bg-destructive/10 text-destructive";
+  return (
+    <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-medium ${color}`}>
+      AEO {score}
+    </span>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <button
+      onClick={copy}
+      className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+    >
+      {copied ? <Check size={11} className="text-chart-2" /> : <Copy size={11} />}
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
 }
 
 interface Props {
@@ -121,6 +154,8 @@ export function ProjectDashboard({ projectId, project, initialJobs }: Props) {
 
   const [seoError, setSeoError] = useState<string | null>(null);
   const [contentError, setContentError] = useState<string | null>(null);
+  const [llmsTxt, setLlmsTxt] = useState<string | null>(null);
+  const [llmsTxtOpen, setLlmsTxtOpen] = useState(false);
 
   const { steps: seoSteps, done: seoDone } = useJobProgress(activeSeoJobId);
   const { steps: contentSteps, done: contentDone } = useJobProgress(activeContentJobId);
@@ -211,6 +246,16 @@ export function ProjectDashboard({ projectId, project, initialJobs }: Props) {
   const removeTopic = (i: number) => setTopics((prev) => prev.filter((_, idx) => idx !== i));
   const addTopic = () => setTopics((prev) => [...prev, { title: "", keyword: "" }]);
 
+  const fetchLlmsTxt = async () => {
+    if (llmsTxt) { setLlmsTxtOpen(true); return; }
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/api/projects/${projectId}/llms.txt`);
+      const text = await res.text();
+      setLlmsTxt(text);
+      setLlmsTxtOpen(true);
+    } catch {}
+  };
+
   const seoOutputData = seoJob?.outputData;
   const articles = (contentJob?.outputData?.articles as ArticleRef[] | undefined) ?? [];
 
@@ -244,7 +289,40 @@ export function ProjectDashboard({ projectId, project, initialJobs }: Props) {
             <BarChart2 size={12} />
             Visibility History
           </Link>
+          <button
+            onClick={fetchLlmsTxt}
+            className="inline-flex items-center gap-2 h-8 px-3 border border-border rounded-md text-[12.5px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors text-left"
+          >
+            <span className="text-[10px] font-mono bg-muted px-1 rounded">llms.txt</span>
+            Generate llms.txt
+          </button>
         </div>
+
+        {/* llms.txt panel */}
+        {llmsTxtOpen && llmsTxt && (
+          <div className="bg-card border border-border rounded-xl p-4">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                llms.txt
+              </p>
+              <div className="flex items-center gap-2">
+                <CopyButton text={llmsTxt} />
+                <button
+                  onClick={() => setLlmsTxtOpen(false)}
+                  className="text-muted-foreground/50 hover:text-foreground"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            </div>
+            <pre className="text-[10px] text-muted-foreground bg-muted/50 rounded-md p-3 overflow-auto max-h-48 whitespace-pre-wrap font-mono leading-relaxed">
+              {llmsTxt}
+            </pre>
+            <p className="text-[10px] text-muted-foreground mt-2">
+              Place this file at <span className="font-mono">{project.websiteUrl.replace(/\/$/, "")}/llms.txt</span>
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Pipeline cards */}
@@ -443,6 +521,9 @@ export function ProjectDashboard({ projectId, project, initialJobs }: Props) {
                         {article.wordCount?.toLocaleString()} words
                       </p>
                     </div>
+                    {article.aeoScore !== undefined && (
+                      <AeoScoreBadge score={article.aeoScore} />
+                    )}
                     <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-medium">
                       draft
                     </span>
