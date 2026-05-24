@@ -28,6 +28,7 @@ celery_app.conf.update(
         "app.tasks.publish_tasks.*": {"queue": "publish"},
         "app.tasks.analytics_tasks.*": {"queue": "analytics"},
         "app.tasks.campaign_tasks.*": {"queue": "default"},
+        "app.tasks.citation_tasks.*": {"queue": "default"},
     },
     worker_max_tasks_per_child=50,
     beat_schedule={
